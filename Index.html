@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emploi du Temps - Madrassa</title>
+    <style>
+        /* FOND TRANSPARENT POUR L'INTÉGRATION WORDPRESS */
+        body { 
+            font-family: Arial, sans-serif; 
+            background-color: transparent; /* Crucial pour l'iframe */
+            margin: 0; 
+            padding: 10px; 
+            color: #333;
+        }
+
+        /* STYLE DU MENU DÉROULANT */
+        .header-control { 
+            text-align: center; 
+            margin-bottom: 30px; 
+        }
+        select { 
+            padding: 12px; 
+            font-size: 16px; 
+            border-radius: 8px; 
+            border: 2px solid #004085; 
+            width: 100%; 
+            max-width: 400px;
+            background-color: white;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        /* GRILLE EMPLOI DU TEMPS (Façon Pronote) */
+        .schedule-container { 
+            display: none; /* Caché tant qu'aucune classe n'est sélectionnée */
+        }
+        .grid { 
+            display: grid; 
+            grid-template-columns: repeat(7, 1fr); /* 7 colonnes pour les 7 jours */
+            gap: 10px; 
+        }
+        .day-column {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .day-header { 
+            background-color: #004085; 
+            color: white; 
+            text-align: center; 
+            padding: 10px; 
+            font-weight: bold; 
+            border-radius: 6px; 
+            text-transform: uppercase;
+            font-size: 14px;
+        }
+
+        /* CARTE DE COURS */
+        .course-card { 
+            background-color: #f8f9fa; 
+            border-left: 5px solid #28a745; 
+            padding: 10px; 
+            border-radius: 6px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .course-time { font-weight: bold; color: #dc3545; font-size: 13px; }
+        .course-subject { color: #004085; font-weight: bold; margin: 5px 0; font-size: 15px; }
+        .course-teacher { font-style: italic; color: #6c757d; font-size: 12px; }
+
+        /* RESPONSIVE POUR TÉLÉPHONES ET TABLETTES */
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; } /* Les jours s'empilent sur petit écran */
+            .day-header { margin-top: 20px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header-control">
+        <select id="select-classe-public">
+            <option value="">-- Sélectionnez votre classe --</option>
+            <!-- Les classes apparaîtront ici -->
+        </select>
+    </div>
+
+    <div id="schedule-container" class="schedule-container">
+        <div class="grid" id="schedule-grid">
+            <!-- La grille générée en JavaScript apparaîtra ici -->
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, query, where } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // TA CONFIGURATION FIREBASE (À REMPLACER PAR LA TIENNE)
+        const firebaseConfig = {
+  apiKey: "AIzaSyBiiF6i7vweIIyyjKH0p-CP20iHaDKspkY",
+  authDomain: "madrassa-web.firebaseapp.com",
+  projectId: "madrassa-web",
+  storageBucket: "madrassa-web.firebasestorage.app",
+  messagingSenderId: "214049102730",
+  appId: "1:214049102730:web:78f2180bec288b08db4673",
+  measurementId: "G-8QQ3P72GRE"
+};
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const selectClassePublic = document.getElementById('select-classe-public');
+        const scheduleContainer = document.getElementById('schedule-container');
+        const scheduleGrid = document.getElementById('schedule-grid');
+
+        const joursSemaine = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+
+        // 1. CHARGER LES CLASSES DANS LE MENU DÉROULANT
+        onSnapshot(collection(db, "classes"), (snapshot) => {
+            let optionsHTML = '<option value="">-- Sélectionnez votre classe --</option>';
+            snapshot.forEach((doc) => {
+                optionsHTML += `<option value="${doc.id}">${doc.data().nom}</option>`;
+            });
+            selectClassePublic.innerHTML = optionsHTML;
+        });
+
+        // 2. ÉCOUTER LE CHANGEMENT DE CLASSE POUR AFFICHER L'EMPLOI DU TEMPS
+        selectClassePublic.addEventListener('change', (e) => {
+            const classeId = e.target.value;
+
+            if (!classeId) {
+                scheduleContainer.style.display = 'none'; // Cacher si aucune classe n'est choisie
+                return;
+            }
+
+            scheduleContainer.style.display = 'block'; // Afficher la grille
+
+            // Requête ciblée : uniquement les cours de cette classe
+            const q = query(collection(db, "cours"), where("classeId", "==", classeId));
+            
+            onSnapshot(q, (snapshot) => {
+                const coursList = [];
+                snapshot.forEach((doc) => {
+                    coursList.push(doc.data());
+                });
+
+                // Trier les cours par heure de début (directement en JS)
+                coursList.sort((a, b) => a.heureDebut.localeCompare(b.heureDebut));
+
+                genererGrille(coursList);
+            });
+        });
+
+        // 3. GÉNÉRER LA GRILLE VISUELLE
+        function genererGrille(coursList) {
+            scheduleGrid.innerHTML = ''; // Nettoyer la grille
+
+            joursSemaine.forEach(jour => {
+                // Créer la colonne pour le jour
+                const colHTML = document.createElement('div');
+                colHTML.className = 'day-column';
+                
+                // En-tête du jour
+                colHTML.innerHTML = `<div class="day-header">${jour}</div>`;
+
+                // Filtrer les cours pour CE jour précis
+                const coursDuJour = coursList.filter(c => c.jour === jour);
+
+                if (coursDuJour.length === 0) {
+                    colHTML.innerHTML += `<div class="course-card" style="border-left-color: transparent; text-align:center; color:#999; font-style:italic;">Aucun cours</div>`;
+                } else {
+                    // Ajouter chaque cours
+                    coursDuJour.forEach(cours => {
+                        colHTML.innerHTML += `
+                            <div class="course-card">
+                                <div class="course-time">${cours.heureDebut} - ${cours.heureFin}</div>
+                                <div class="course-subject">${cours.matiere}</div>
+                                <div class="course-teacher">🧑‍🏫 ${cours.professeur}</div>
+                            </div>
+                        `;
+                    });
+                }
+
+                scheduleGrid.appendChild(colHTML);
+            });
+        }
+    </script>
+</body>
+</html>
